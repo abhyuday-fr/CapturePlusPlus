@@ -1,4 +1,5 @@
 #include "packet_capture.hpp"
+#include "protocols.hpp"
 #include <cstdio>
 #include <cstring>
 #include <pcap/pcap.h>
@@ -63,12 +64,48 @@ bool PacketCapture::run(int count) {
 }
 
 void PacketCapture::onPacket(const pcap_pkthdr *header, const u_char *bytes) {
-  std::printf("---- packet: caplen=%u len=%u ----\n", header->caplen,
-              header->len);
-  for (uint32_t i = 0; i < header->caplen; ++i) {
-    std::printf("%02x ", bytes[i]);
-    if ((i + 1) % 16 == 0)
-      std::printf("\n");
+  EthernetView eth(bytes, header->caplen);
+  if (!eth.isValid()) {
+    std::printf("[truncated ethernet frame]\n");
+    return;
   }
-  std::printf("\n\n");
+
+  std::printf("Eth: %s -> %s  type=0x%04x\n", eth.srcMac().c_str(),
+              eth.dstMac().c_str(), eth.etherType());
+
+  if (eth.etherType() != 0x0800) {
+    std::printf("  (non-IPv4, skipping)\n\n");
+    return;
+  }
+
+  IPv4View ip(eth.payload(), eth.payloadLen());
+  if (!ip.isValid()) {
+    std::printf("  [truncated/invalid IPv4 header]\n\n");
+    return;
+  }
+
+  std::printf("  IPv4: %s -> %s  proto=%u ttl=%u\n", ip.srcIP().c_str(),
+              ip.dstIP().c_str(), ip.protocol(), ip.ttl());
+
+  if (ip.protocol() == 6) {
+    TCPView tcp(ip.payload(), ip.payloadLen());
+    if (!tcp.isValid()) {
+      std::printf("    [truncated/invalid TCP header]\n\n");
+      return;
+    }
+    std::printf("    TCP: %u -> %u  seq=%u flags=%s%s%s%s\n\n", tcp.srcPort(),
+                tcp.dstPort(), tcp.seqNum(), tcp.flagSYN() ? "S" : "",
+                tcp.flagACK() ? "A" : "", tcp.flagFIN() ? "F" : "",
+                tcp.flagRST() ? "R" : "");
+  } else if (ip.protocol() == 17) {
+    UDPView udp(ip.payload(), ip.payloadLen());
+    if (!udp.isValid()) {
+      std::printf("    [truncated/invalid UDP header]\n\n");
+      return;
+    }
+    std::printf("    UDP: %u -> %u  len=%u\n\n", udp.srcPort(), udp.dstPort(),
+                udp.length());
+  } else {
+    std::printf("    (protocol %u, not dissected yet)\n\n", ip.protocol());
+  }
 }
