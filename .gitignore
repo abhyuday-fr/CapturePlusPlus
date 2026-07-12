@@ -1,0 +1,10 @@
+# build artifacts
+build/
+*.o
+*.a
+*.so
+
+compile_commands.json
+
+.ccache
+.cache/
