@@ -87,6 +87,49 @@ private:
   size_t len_;
 };
 
+class IPv6View {
+public:
+  static constexpr size_t kHeaderLen = 40; // always fixed as no IHL
+
+  IPv6View(const uint8_t *data, size_t len) : data_(data), len_(len) {}
+
+  bool isValid() const { return data_ != nullptr && len_ >= kHeaderLen; }
+
+  uint8_t version() const { return (data_[0] >> 4) & 0x0F; }
+  uint16_t payloadLength() const { return readU16(4); }
+  uint8_t nextHeader() const { return data_[6]; }
+  uint8_t hopLimit() const { return data_[7]; }
+
+  std::string srcIP() const { return ipToString(data_ + 8); }
+  std::string dstIP() const { return ipToString(data_ + 24); }
+
+  const uint8_t *payload() const { return data_ + kHeaderLen; }
+
+  size_t payloadLen() const {
+    return kHeaderLen <= len_ ? len_ - kHeaderLen : 0;
+  }
+
+private:
+  const uint8_t *data_;
+  size_t len_;
+
+  uint16_t readU16(size_t offset) const {
+    uint16_t raw;
+    std::memcpy(&raw, data_ + offset, 2);
+    return ntohs(raw);
+  }
+
+  static std::string ipToString(const uint8_t *ip) {
+    char buf[40];
+    std::snprintf(buf, sizeof(buf),
+                  "%02x%02x:%02x%02x:%02x%02x:%02x%02x:"
+                  "%02x%02x:%02x%02x:%02x%02x:%02x%02x",
+                  ip[0], ip[1], ip[2], ip[3], ip[4], ip[5], ip[6], ip[7], ip[8],
+                  ip[9], ip[10], ip[11], ip[12], ip[13], ip[14], ip[15]);
+    return buf;
+  }
+};
+
 class TCPView {
 public:
   static constexpr size_t kMinHeaderLen = 20;

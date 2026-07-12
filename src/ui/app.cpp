@@ -8,7 +8,6 @@
 
 #include <atomic>
 #include <chrono>
-#include <csignal>
 #include <cstdio>
 #include <string>
 #include <thread>
@@ -18,43 +17,58 @@ using namespace ftxui;
 
 namespace {
 
+std::string dissectTransport(uint8_t proto, const std::string &srcIP,
+                             const std::string &dstIP, const uint8_t *payload,
+                             size_t payloadLen) {
+  char buf[160];
+  if (proto == 6) {
+    TCPView tcp(payload, payloadLen);
+    if (!tcp.isValid())
+      return "[invalid TCP header]";
+    std::snprintf(
+        buf, sizeof(buf), "TCP  %-39s:%-5u -> %-39s:%-5u  seq=%u %s%s%s%s",
+        srcIP.c_str(), tcp.srcPort(), dstIP.c_str(), tcp.dstPort(),
+        tcp.seqNum(), tcp.flagSYN() ? "S" : "", tcp.flagACK() ? "A" : "",
+        tcp.flagFIN() ? "F" : "", tcp.flagRST() ? "R" : "");
+  } else if (proto == 17) {
+    UDPView udp(payload, payloadLen);
+    if (!udp.isValid())
+      return "[invalid UDP header]";
+    std::snprintf(buf, sizeof(buf), "UDP  %-39s:%-5u -> %-39s:%-5u  len=%u",
+                  srcIP.c_str(), udp.srcPort(), dstIP.c_str(), udp.dstPort(),
+                  udp.length());
+  } else {
+    std::snprintf(buf, sizeof(buf),
+                  "%-39s -> %-39s  next/proto=%u (not dissected)",
+                  srcIP.c_str(), dstIP.c_str(), proto);
+  }
+  return buf;
+}
+
 std::string summarize(const CapturedPacket &pkt) {
   EthernetView eth(pkt.bytes.data(), pkt.bytes.size());
   if (!eth.isValid())
     return "[truncated ethernet frame]";
 
-  if (eth.etherType() != 0x0800) {
-    char buf[64];
-    std::snprintf(buf, sizeof(buf), "eth type=0x%04x (not IPv4)",
-                  eth.etherType());
-    return buf;
+  if (eth.etherType() == 0x0800) {
+    IPv4View ip(eth.payload(), eth.payloadLen());
+    if (!ip.isValid())
+      return "[invalid IPv4 header]";
+    return dissectTransport(ip.protocol(), ip.srcIP(), ip.dstIP(), ip.payload(),
+                            ip.payloadLen());
   }
 
-  IPv4View ip(eth.payload(), eth.payloadLen());
-  if (!ip.isValid())
-    return "[invalid IPv4 header]";
-
-  char buf[160];
-  if (ip.protocol() == 6) {
-    TCPView tcp(ip.payload(), ip.payloadLen());
-    if (!tcp.isValid())
-      return "[invalid TCP header]";
-    std::snprintf(
-        buf, sizeof(buf), "TCP  %-15s:%-5u -> %-15s:%-5u  seq=%u %s%s%s%s",
-        ip.srcIP().c_str(), tcp.srcPort(), ip.dstIP().c_str(), tcp.dstPort(),
-        tcp.seqNum(), tcp.flagSYN() ? "S" : "", tcp.flagACK() ? "A" : "",
-        tcp.flagFIN() ? "F" : "", tcp.flagRST() ? "R" : "");
-  } else if (ip.protocol() == 17) {
-    UDPView udp(ip.payload(), ip.payloadLen());
-    if (!udp.isValid())
-      return "[invalid UDP header]";
-    std::snprintf(buf, sizeof(buf), "UDP  %-15s:%-5u -> %-15s:%-5u  len=%u",
-                  ip.srcIP().c_str(), udp.srcPort(), ip.dstIP().c_str(),
-                  udp.dstPort(), udp.length());
-  } else {
-    std::snprintf(buf, sizeof(buf), "IPv4 %-15s -> %-15s  proto=%u",
-                  ip.srcIP().c_str(), ip.dstIP().c_str(), ip.protocol());
+  if (eth.etherType() == 0x86DD) {
+    IPv6View ip(eth.payload(), eth.payloadLen());
+    if (!ip.isValid())
+      return "[invalid IPv6 header]";
+    return dissectTransport(ip.nextHeader(), ip.srcIP(), ip.dstIP(),
+                            ip.payload(), ip.payloadLen());
   }
+
+  char buf[64];
+  std::snprintf(buf, sizeof(buf), "eth type=0x%04x (unsupported)",
+                eth.etherType());
   return buf;
 }
 
@@ -72,9 +86,8 @@ int runApp(PacketCapture &capture, int count) {
 
   auto screen = ScreenInteractive::Fullscreen();
 
-  // Mutated ONLY inside the CatchEvent handler below, which always runs
-  // on FTXUI's own thread -- see the design note from our last discussion
-  // on why this doesn't need its own mutex.
+  // Mutated ONLY inside the CatchEvent handler below, which always runs on
+  // FTXUI's own thread
   std::vector<std::string> lines;
   std::vector<CapturedPacket> packets;
   int selected = 0;
@@ -92,18 +105,37 @@ int runApp(PacketCapture &capture, int count) {
            border;
   });
 
+  bool autoFollow = true;
+
   auto rootComponent = CatchEvent(layout, [&](Event event) {
     if (event == Event::Custom) {
       std::vector<CapturedPacket> batch;
-      while (queue.drainInto(batch, std::chrono::milliseconds(0))) {
+      bool gotData = queue.drainInto(batch, std::chrono::milliseconds(0));
+      if (gotData) {
         for (auto &pkt : batch) {
           lines.push_back(summarize(pkt));
           packets.push_back(std::move(pkt));
         }
-        batch.clear();
+        if (autoFollow) {
+          selected = static_cast<int>(lines.size()) - 1;
+        }
       }
       return true;
     }
+
+    // Manual navigation disengages auto-follow -- otherwise the view would
+    // keep yanking the user back to the bottom mid-inspection.
+    if (event == Event::ArrowUp || event == Event::ArrowDown ||
+        event == Event::PageUp || event == Event::PageDown) {
+      autoFollow = false;
+      return false; // still let Menu handle the actual movement
+    }
+    if (event == Event::End) {
+      autoFollow = true;
+      selected = static_cast<int>(lines.size()) - 1;
+      return true;
+    }
+
     if (event == Event::Character('q')) {
       screen.Exit();
       return true;

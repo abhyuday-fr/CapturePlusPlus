@@ -181,3 +181,64 @@ TEST(ProtocolChainTest, FullEthernetIPv4TCPFrame) {
   EXPECT_EQ(tcp.dstPort(), 80);
   EXPECT_TRUE(tcp.flagACK()); // flags byte 0x18 = PSH+ACK
 }
+
+TEST(IPv6ViewTest, ParsesValidHeader) {
+  std::vector<uint8_t> ip = {0x60, 0x00, 0x00,
+                             0x00, // version=6, traffic class=0, flow label=0
+                             0x00, 0x04, // payload length = 4
+                             0x06,       // next header = TCP
+                             0x40,       // hop limit = 64
+                             // src = fe80:0000:0000:0000:0000:0000:0000:0001
+                             0xfe, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+                             // dst = fe80:0000:0000:0000:0000:0000:0000:0002
+                             0xfe, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02,
+                             // payload
+                             0xAA, 0xBB, 0xCC, 0xDD};
+
+  IPv6View v(ip.data(), ip.size());
+  ASSERT_TRUE(v.isValid());
+  EXPECT_EQ(v.version(), 6);
+  EXPECT_EQ(v.nextHeader(), 6);
+  EXPECT_EQ(v.hopLimit(), 64);
+  EXPECT_EQ(v.srcIP(), "fe80:0000:0000:0000:0000:0000:0000:0001");
+  EXPECT_EQ(v.dstIP(), "fe80:0000:0000:0000:0000:0000:0000:0002");
+  EXPECT_EQ(v.payloadLen(), 4u);
+}
+
+TEST(IPv6ViewTest, RejectsTruncatedHeader) {
+  std::vector<uint8_t> ip(20, 0); // less than the fixed 40-byte minimum
+  IPv6View v(ip.data(), ip.size());
+  EXPECT_FALSE(v.isValid());
+}
+
+TEST(ProtocolChainTest, FullEthernetIPv6TCPFrame) {
+  std::vector<uint8_t> frame = {
+      // Ethernet
+      0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF,
+      0x86, 0xDD, // EtherType = IPv6
+      // IPv6 (40 bytes)
+      0x60, 0x00, 0x00, 0x00, 0x00,
+      0x14, // payload length = 20 (TCP header, no options/data)
+      0x06, // next header = TCP
+      0x40, 0xfe, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+      0x00, 0x00, 0x00, 0x00, 0x01, 0xfe, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00,
+      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02,
+      // TCP (20 bytes, no options)
+      0x1F, 0x90, 0x00, 0x50, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00,
+      0x50, 0x02, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00};
+
+  EthernetView eth(frame.data(), frame.size());
+  ASSERT_TRUE(eth.isValid());
+  ASSERT_EQ(eth.etherType(), 0x86DD);
+
+  IPv6View ip(eth.payload(), eth.payloadLen());
+  ASSERT_TRUE(ip.isValid());
+  ASSERT_EQ(ip.nextHeader(), 6);
+
+  TCPView tcp(ip.payload(), ip.payloadLen());
+  ASSERT_TRUE(tcp.isValid());
+  EXPECT_EQ(tcp.srcPort(), 8080);
+  EXPECT_TRUE(tcp.flagSYN());
+}
