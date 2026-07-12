@@ -1,5 +1,5 @@
 // tests/test_protocols.cpp
-#include "protocols.hpp"
+#include "protocols/protocols.hpp"
 #include <gtest/gtest.h>
 #include <vector>
 
