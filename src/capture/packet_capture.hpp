@@ -12,7 +12,7 @@ class PacketCapture {
 public:
   static std::optional<PacketCapture>
   openLive(const std::string &interface, std::string &errOut,
-           int snaplen = 65535, bool promiscuous = true, int timeoutMs = 1000);
+           int snaplen = 65535, bool promiscuous = true, int timeoutMs = 100);
 
   static std::optional<PacketCapture> openOffline(const std::string &pcapFile,
                                                   std::string &errout);
