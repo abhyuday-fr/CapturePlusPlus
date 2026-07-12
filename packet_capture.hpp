@@ -1,7 +1,7 @@
 #ifndef PACKET_CAPTURE_HPP
 #define PACKET_CAPTURE_HPP
 
-#include <cstdint>
+#include "packet_queue.hpp"
 #include <optional>
 #include <pcap.h>
 #include <pcap/pcap.h>
@@ -27,7 +27,11 @@ public:
 
   ~PacketCapture();
 
-  bool run(int count = -1);
+  bool run(PacketQueue *queue, int count = -1);
+
+  void stop();
+
+  int linkType() const { return linkType_; }
 
 private:
   // private constructor, only factories are allowed to have one
@@ -41,6 +45,8 @@ private:
   void onPacket(const pcap_pkthdr *header, const u_char *bytes);
 
   pcap_t *handle_ = nullptr;
+  int linkType_ = -1;            // DLT_* value from pcap_datalink()
+  PacketQueue *queue_ = nullptr; // non-owning, only valid during a run() call
 };
 
 #endif

@@ -1,15 +1,14 @@
 #include "packet_capture.hpp"
-#include "protocols.hpp"
-#include <cstdio>
-#include <cstring>
 #include <pcap/pcap.h>
 #include <sys/types.h>
 
-PacketCapture::PacketCapture(pcap *handle) : handle_(handle) {}
+PacketCapture::PacketCapture(pcap *handle)
+    : handle_(handle), linkType_(pcap_datalink(handle)) {}
 
 PacketCapture::PacketCapture(PacketCapture &&other) noexcept
-    : handle_(other.handle_) {
+    : handle_(other.handle_), linkType_(other.linkType_) {
   other.handle_ = nullptr;
+  other.linkType_ = -1;
 }
 
 PacketCapture &PacketCapture::operator=(PacketCapture &&other) noexcept {
@@ -17,7 +16,9 @@ PacketCapture &PacketCapture::operator=(PacketCapture &&other) noexcept {
     if (handle_)
       pcap_close(handle_);
     handle_ = other.handle_;
+    linkType_ = other.linkType_;
     other.handle_ = nullptr;
+    other.linkType_ = -1;
   }
   return *this;
 }
@@ -57,55 +58,29 @@ void PacketCapture::trampoline(u_char *user, const pcap_pkthdr *header,
   self->onPacket(header, bytes);
 }
 
-bool PacketCapture::run(int count) {
+bool PacketCapture::run(PacketQueue *queue, int count) {
+  queue_ = queue;
   int result = pcap_loop(handle_, count, &PacketCapture::trampoline,
                          reinterpret_cast<u_char *>(this));
+  queue_ = nullptr; // don't leave a dangling pointer
   return result == 0;
 }
 
+void PacketCapture::stop() {
+  if (handle_) {
+    pcap_breakloop(handle_);
+  }
+}
+
 void PacketCapture::onPacket(const pcap_pkthdr *header, const u_char *bytes) {
-  EthernetView eth(bytes, header->caplen);
-  if (!eth.isValid()) {
-    std::printf("[truncated ethernet frame]\n");
+  if (!queue_) {
     return;
   }
 
-  std::printf("Eth: %s -> %s  type=0x%04x\n", eth.srcMac().c_str(),
-              eth.dstMac().c_str(), eth.etherType());
+  CapturedPacket packet;
+  packet.bytes.assign(bytes, bytes + header->caplen);
+  packet.capLen = header->caplen;
+  packet.origLen = header->len;
 
-  if (eth.etherType() != 0x0800) {
-    std::printf("  (non-IPv4, skipping)\n\n");
-    return;
-  }
-
-  IPv4View ip(eth.payload(), eth.payloadLen());
-  if (!ip.isValid()) {
-    std::printf("  [truncated/invalid IPv4 header]\n\n");
-    return;
-  }
-
-  std::printf("  IPv4: %s -> %s  proto=%u ttl=%u\n", ip.srcIP().c_str(),
-              ip.dstIP().c_str(), ip.protocol(), ip.ttl());
-
-  if (ip.protocol() == 6) {
-    TCPView tcp(ip.payload(), ip.payloadLen());
-    if (!tcp.isValid()) {
-      std::printf("    [truncated/invalid TCP header]\n\n");
-      return;
-    }
-    std::printf("    TCP: %u -> %u  seq=%u flags=%s%s%s%s\n\n", tcp.srcPort(),
-                tcp.dstPort(), tcp.seqNum(), tcp.flagSYN() ? "S" : "",
-                tcp.flagACK() ? "A" : "", tcp.flagFIN() ? "F" : "",
-                tcp.flagRST() ? "R" : "");
-  } else if (ip.protocol() == 17) {
-    UDPView udp(ip.payload(), ip.payloadLen());
-    if (!udp.isValid()) {
-      std::printf("    [truncated/invalid UDP header]\n\n");
-      return;
-    }
-    std::printf("    UDP: %u -> %u  len=%u\n\n", udp.srcPort(), udp.dstPort(),
-                udp.length());
-  } else {
-    std::printf("    (protocol %u, not dissected yet)\n\n", ip.protocol());
-  }
+  queue_->push(std::move(packet));
 }

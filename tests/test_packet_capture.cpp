@@ -26,7 +26,7 @@ TEST(PacketCaptureTest, RunOnOfflineFileSucceeds) {
   std::string err;
   auto capture = PacketCapture::openOffline(fixture("sample.pcap"), err);
   ASSERT_TRUE(capture.has_value());
-  EXPECT_TRUE(capture->run(-1));
+  EXPECT_TRUE(capture->run(nullptr, -1));
 }
 
 TEST(PacketCaptureTest, MoveConstructorTransfersOwnership) {
@@ -35,5 +35,12 @@ TEST(PacketCaptureTest, MoveConstructorTransfersOwnership) {
   ASSERT_TRUE(capture.has_value());
 
   PacketCapture moved(std::move(*capture));
-  EXPECT_TRUE(moved.run(-1));
+  EXPECT_TRUE(moved.run(nullptr, -1));
+}
+
+TEST(PacketCaptureTest, OfflineFixtureReportsEthernetLinkType) {
+  std::string err;
+  auto capture = PacketCapture::openOffline(fixture("sample.pcap"), err);
+  ASSERT_TRUE(capture.has_value());
+  EXPECT_EQ(capture->linkType(), DLT_EN10MB);
 }
