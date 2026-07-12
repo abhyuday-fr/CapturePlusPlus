@@ -13,13 +13,17 @@ endif()
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(PCAP REQUIRED libpcap)
 
+# --- Threads ---
+find_package(Threads REQUIRED)
+
 # --- core library: everything except main(), so tests can link against it too ---
 add_library(cappp_core
     packet_capture.cpp
+    packet_queue.cpp
 )
 target_include_directories(cappp_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_include_directories(cappp_core PUBLIC ${PCAP_INCLUDE_DIRS})
-target_link_libraries(cappp_core PUBLIC ${PCAP_LIBRARIES})
+target_link_libraries(cappp_core PUBLIC ${PCAP_LIBRARIES} Threads::Threads)
 target_compile_options(cappp_core PUBLIC ${PCAP_CFLAGS_OTHER})
 
 # --- the actual binary ---
